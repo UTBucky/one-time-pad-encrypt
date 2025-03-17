@@ -3,157 +3,84 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <ctype.h>
-#include <fcntl.h>
 
 #define MAX_BUFFER_SIZE 1024
 
-// Function to check if a file contains only valid characters (letters)
-int is_valid_file(const char *filename) {
-    FILE *file = fopen(filename, "r");
-    if (file == NULL) {
-        return 0; // Could not open the file
-    }
-
-    char ch;
-    while ((ch = fgetc(file)) != EOF) {
-        if (!isalpha(ch)) {
-            fclose(file);
-            return 0; // Invalid character found
-        }
-    }
-
-    fclose(file);
-    return 1; // File contains only valid characters
-}
-
-// Function to connect to dec_server and handle decryption
-int connect_to_server(const char *hostname, int port) {
-    int sockfd;
+// Function to connect to dec_server and send ciphertext and key for decryption
+void decrypt_and_receive(char *ciphertext, char *key, const char *server_ip, int server_port) {
+    int sock;
     struct sockaddr_in server_addr;
+    char buffer[MAX_BUFFER_SIZE];
+    int bytes_received;
 
     // Create socket
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Error: Failed to create socket");
-        return -1;
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = inet_addr(hostname);
+    server_addr.sin_port = htons(server_port);
+    server_addr.sin_addr.s_addr = inet_addr(server_ip);
 
     // Connect to the server
-    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Error: Connection failed");
-        close(sockfd);
-        return -1;
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+        perror("Connection failed");
+        close(sock);
+        exit(2);  // Exit with code 2 for connection failure
     }
 
-    return sockfd;
-}
+    // Send ciphertext to the server
+    send(sock, ciphertext, strlen(ciphertext), 0);
 
-// Function to send ciphertext and key to dec_server and receive the decrypted message
-void decrypt_message(int sockfd, const char *ciphertext, const char *key) {
-    // Send the ciphertext
-    if (send(sockfd, ciphertext, strlen(ciphertext), 0) < 0) {
-        perror("Error: Failed to send ciphertext");
-        close(sockfd);
-        exit(1);
-    }
-
-    // Send the key
-    if (send(sockfd, key, strlen(key), 0) < 0) {
-        perror("Error: Failed to send key");
-        close(sockfd);
-        exit(1);
-    }
+    // Send key to the server
+    send(sock, key, strlen(key), 0);
 
     // Receive the decrypted plaintext from the server
-    char decrypted[MAX_BUFFER_SIZE];
-    int recv_len = recv(sockfd, decrypted, sizeof(decrypted) - 1, 0);
-    if (recv_len < 0) {
-        perror("Error: Failed to receive decrypted data");
-        close(sockfd);
-        exit(1);
+    bytes_received = recv(sock, buffer, MAX_BUFFER_SIZE, 0);
+    if (bytes_received < 0) {
+        perror("recv failed");
+        close(sock);
+        exit(EXIT_FAILURE);
     }
-    decrypted[recv_len] = '\0'; // Null-terminate the decrypted message
+    buffer[bytes_received] = '\0';
 
-    // Output the decrypted message to stdout
-    printf("Decrypted message: %s\n", decrypted);
+    // Output the decrypted plaintext
+    printf("Decrypted plaintext: %s\n", buffer);
 
-    close(sockfd);
+    close(sock);
 }
 
-// Main function for dec_client
 int main(int argc, char *argv[]) {
     if (argc != 4) {
-        fprintf(stderr, "Usage: %s <plaintext file> <key file> <port>\n", argv[0]);
-        exit(1);
+        fprintf(stderr, "Usage: %s <ciphertext_file> <key_file> <port>\n", argv[0]);
+        return 1;
     }
 
-    const char *plaintext_file = argv[1];
-    const char *key_file = argv[2];
+    FILE *ciphertext_file = fopen(argv[1], "r");
+    FILE *key_file = fopen(argv[2], "r");
+    char ciphertext[MAX_BUFFER_SIZE], key[MAX_BUFFER_SIZE];
     int port = atoi(argv[3]);
 
-    // Check if the files contain valid characters
-    if (!is_valid_file(plaintext_file)) {
-        fprintf(stderr, "Error: Invalid plaintext file (only alphabetic characters allowed)\n");
-        exit(1);
+    if (!ciphertext_file || !key_file) {
+        fprintf(stderr, "Error opening files\n");
+        return 1;
     }
 
-    if (!is_valid_file(key_file)) {
-        fprintf(stderr, "Error: Invalid key file (only alphabetic characters allowed)\n");
-        exit(1);
-    }
+    // Read ciphertext from file
+    fgets(ciphertext, MAX_BUFFER_SIZE, ciphertext_file);
+    fclose(ciphertext_file);
 
-    // Open the plaintext file and key file
-    FILE *file = fopen(plaintext_file, "r");
-    if (!file) {
-        perror("Error: Failed to open plaintext file");
-        exit(1);
-    }
+    // Read key from file
+    fgets(key, MAX_BUFFER_SIZE, key_file);
+    fclose(key_file);
 
-    char ciphertext[MAX_BUFFER_SIZE];
-    size_t len = fread(ciphertext, 1, sizeof(ciphertext) - 1, file);
-    if (len == 0) {
-        fprintf(stderr, "Error: Plaintext file is empty\n");
-        fclose(file);
-        exit(1);
-    }
-    ciphertext[len] = '\0'; // Null-terminate the ciphertext
-    fclose(file);
+    // Remove trailing newlines
+    ciphertext[strcspn(ciphertext, "\n")] = 0;
+    key[strcspn(key, "\n")] = 0;
 
-    file = fopen(key_file, "r");
-    if (!file) {
-        perror("Error: Failed to open key file");
-        exit(1);
-    }
-
-    char key[MAX_BUFFER_SIZE];
-    len = fread(key, 1, sizeof(key) - 1, file);
-    if (len == 0) {
-        fprintf(stderr, "Error: Key file is empty\n");
-        fclose(file);
-        exit(1);
-    }
-    key[len] = '\0'; // Null-terminate the key
-    fclose(file);
-
-    // Check that the key is long enough
-    if (strlen(key) < strlen(ciphertext)) {
-        fprintf(stderr, "Error: Key is shorter than the ciphertext\n");
-        exit(1);
-    }
-
-    // Connect to dec_server
-    int sockfd = connect_to_server("127.0.0.1", port);
-    if (sockfd < 0) {
-        fprintf(stderr, "Error: Failed to connect to server on port %d\n", port);
-        exit(2); // Set exit code to 2 for connection failure
-    }
-
-    // Send the ciphertext and key to the server and receive the decrypted message
-    decrypt_message(sockfd, ciphertext, key);
+    // Decrypt and receive the plaintext from the server
+    decrypt_and_receive(ciphertext, key, "127.0.0.1", port);
 
     return 0;
 }
