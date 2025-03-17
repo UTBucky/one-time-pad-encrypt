@@ -3,143 +3,135 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <ctype.h>
-#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <fcntl.h>
 
 #define MAX_BUFFER_SIZE 1024
-#define MAX_CONNECTIONS 5
+#define ALPHABET_SIZE 27 // 26 letters + space
 
-// Function to check if a file contains only valid characters (letters)
-int is_valid_file(const char *filename) {
-    FILE *file = fopen(filename, "r");
-    if (file == NULL) {
-        return 0; // Could not open the file
-    }
-
-    char ch;
-    while ((ch = fgetc(file)) != EOF) {
-        if (!isalpha(ch)) {
-            fclose(file);
-            return 0; // Invalid character found
-        }
-    }
-
-    fclose(file);
-    return 1; // File contains only valid characters
+// Map characters to numbers
+int char_to_num(char c) {
+    if (c == ' ') return 26; // Space maps to 26
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    return -1; // Invalid character
 }
 
-// Function to decrypt ciphertext using a key (Vigenère Cipher-like decryption)
-void decrypt_data(int client_sock) {
-    char plaintext[MAX_BUFFER_SIZE], key[MAX_BUFFER_SIZE];
-    int recv_len;
+// Map numbers back to characters
+char num_to_char(int num) {
+    if (num == 26) return ' '; // Space is 26
+    if (num >= 0 && num <= 25) return 'A' + num;
+    return '\0'; // Invalid number
+}
+
+// Function to perform decryption using modulo 27 arithmetic
+void decrypt_message(char *ciphertext, char *key, char *plaintext) {
+    int i = 0;
+    while (ciphertext[i] != '\0' && key[i] != '\0') {
+        int cipher_num = char_to_num(ciphertext[i]);
+        int key_num = char_to_num(key[i]);
+
+        if (cipher_num == -1 || key_num == -1) {
+            fprintf(stderr, "Invalid character in ciphertext or key.\n");
+            return;
+        }
+
+        // Decrypting using modulo 27
+        int plain_num = (cipher_num - key_num + ALPHABET_SIZE) % ALPHABET_SIZE;
+        plaintext[i] = num_to_char(plain_num);
+
+        i++;
+    }
+    plaintext[i] = '\0'; // Null terminate the decrypted message
+}
+
+// Function to handle client communication and decryption
+void handle_client(int client_sock) {
+    char ciphertext[MAX_BUFFER_SIZE], key[MAX_BUFFER_SIZE], plaintext[MAX_BUFFER_SIZE];
+    int bytes_received;
 
     // Receive ciphertext from the client
-    recv_len = recv(client_sock, plaintext, sizeof(plaintext) - 1, 0);
-    if (recv_len < 0) {
-        fprintf(stderr, "Error: Failed to receive ciphertext\n");
+    bytes_received = recv(client_sock, ciphertext, MAX_BUFFER_SIZE, 0);
+    if (bytes_received <= 0) {
+        perror("recv failed (ciphertext)");
         close(client_sock);
         return;
     }
-    plaintext[recv_len] = '\0'; // Null-terminate the ciphertext
+    ciphertext[bytes_received] = '\0'; // Null terminate the received ciphertext
 
     // Receive key from the client
-    recv_len = recv(client_sock, key, sizeof(key) - 1, 0);
-    if (recv_len < 0) {
-        fprintf(stderr, "Error: Failed to receive key\n");
+    bytes_received = recv(client_sock, key, MAX_BUFFER_SIZE, 0);
+    if (bytes_received <= 0) {
+        perror("recv failed (key)");
         close(client_sock);
         return;
     }
-    key[recv_len] = '\0'; // Null-terminate the key
+    key[bytes_received] = '\0'; // Null terminate the received key
 
-    // Decrypt the ciphertext using the key
-    int i;
-    char decrypted[MAX_BUFFER_SIZE];
-    for (i = 0; i < strlen(plaintext); i++) {
-        // Decrypt each character
-        int cipher_char = plaintext[i] - 'A'; // Convert ciphertext to index (0-25)
-        int key_char = key[i % strlen(key)] - 'A'; // Convert key to index (0-25)
-        int decrypted_char = (cipher_char - key_char + 26) % 26; // Subtract key char and mod 26
-        decrypted[i] = decrypted_char + 'A'; // Convert back to a character
-    }
-    decrypted[i] = '\0'; // Null-terminate the decrypted message
+    // Perform decryption
+    decrypt_message(ciphertext, key, plaintext);
 
-    // Send the decrypted plaintext back to the client
-    if (send(client_sock, decrypted, strlen(decrypted), 0) < 0) {
-        fprintf(stderr, "Error: Failed to send decrypted data\n");
-    }
+    // Send decrypted plaintext back to the client
+    send(client_sock, plaintext, strlen(plaintext), 0);
 
+    // Close the client socket
     close(client_sock);
 }
 
-// Function to handle client connection
-void handle_client(int client_sock) {
-    // Decrypt the data
-    decrypt_data(client_sock);
-}
-
-// Main server function to handle incoming connections
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
-        exit(1);
+        return 1;
     }
 
-    int server_sock, client_sock;
+    int server_sock, client_sock, port;
     struct sockaddr_in server_addr, client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
+    socklen_t client_len = sizeof(client_addr);
+    port = atoi(argv[1]);
 
-    // Create a TCP socket
-    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Error: Failed to create socket");
-        exit(1);
+    // Create server socket
+    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("Socket creation failed");
+        return 1;
     }
 
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(atoi(argv[1]));
+    server_addr.sin_port = htons(port);
     server_addr.sin_addr.s_addr = INADDR_ANY;
 
-    // Bind the socket to the address and port
-    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Error: Failed to bind socket");
+    // Bind the socket to the specified port
+    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+        perror("Bind failed");
         close(server_sock);
-        exit(1);
+        return 1;
     }
 
-    // Listen for incoming connections
-    if (listen(server_sock, MAX_CONNECTIONS) < 0) {
-        perror("Error: Failed to listen on socket");
+    // Listen for incoming connections (max 5 connections in the queue)
+    if (listen(server_sock, 5) == -1) {
+        perror("Listen failed");
         close(server_sock);
-        exit(1);
+        return 1;
     }
 
-    printf("dec_server is listening on port %s...\n", argv[1]);
+    printf("dec_server listening on port %d...\n", port);
 
+    // Accept client connections and handle them
     while (1) {
-        // Accept incoming client connection
-        client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len);
-        if (client_sock < 0) {
-            perror("Error: Failed to accept client connection");
+        // Accept incoming connection
+        client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
+        if (client_sock == -1) {
+            perror("Accept failed");
             continue;
         }
 
-        // Handle the client connection in a child process
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("Error: Failed to fork process");
-            close(client_sock);
-            continue;
-        }
+        printf("Client connected, handling decryption...\n");
 
-        if (pid == 0) { // Child process
-            close(server_sock); // Close server socket in the child process
-            handle_client(client_sock); // Decrypt data
-            exit(0);
-        } else { // Parent process
-            close(client_sock); // Close client socket in the parent process
-        }
+        // Handle client communication in a separate function
+        handle_client(client_sock);
     }
 
+    // Close the server socket (never reached in this infinite loop)
     close(server_sock);
+
     return 0;
 }
