@@ -2,17 +2,25 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define ALPHABET_SIZE 26
-#define CHARSET_SIZE (ALPHABET_SIZE + 1)  // 26 letters + 1 for newline
+#define ALPHABET_SIZE 27 // 26 letters + space
+#define CHARACTERS "ABCDEFGHIJKLMNOPQRSTUVWXYZ " // Allowed characters
 
-// Function to generate the key of a specified length
+// Function to generate a random key of a specified length
 void generate_key(int keylength) {
-    const char charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ\n";  // 27 characters (26 letters + newline)
-    
-    for (int i = 0; i < keylength; ++i) {
-        int random_index = rand() % CHARSET_SIZE;  // Randomly pick an index in the charset
-        putchar(charset[random_index]);  // Output the character to stdout
+    // Seed the random number generator
+    srand(time(NULL));
+
+    // Generate and output the key
+    for (int i = 0; i < keylength; i++) {
+        // Pick a random index from 0 to ALPHABET_SIZE - 1
+        int random_index = rand() % ALPHABET_SIZE;
+
+        // Output the corresponding character
+        putchar(CHARACTERS[random_index]);
     }
+
+    // Output a newline at the end of the key
+    putchar('\n');
 }
 
 int main(int argc, char *argv[]) {
@@ -21,17 +29,15 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    int keylength = atoi(argv[1]);  // Convert the argument to an integer
+    // Get the key length from the command-line argument
+    int keylength = atoi(argv[1]);
 
     if (keylength <= 0) {
-        fprintf(stderr, "Error: Invalid key length. The key length must be a positive integer.\n");
+        fprintf(stderr, "Key length must be a positive integer.\n");
         return 1;
     }
 
-    // Seed the random number generator using the current time
-    srand(time(NULL));
-
-    // Generate the key of the specified length
+    // Generate and print the key
     generate_key(keylength);
 
     return 0;
